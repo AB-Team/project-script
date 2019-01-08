@@ -1,0 +1,17 @@
+{
+  "name": "project-scripts",
+  "version": "1.0.0",
+  "description": "To pull video rss from youtube.",
+  "main": "youtuberss.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "mongodb": "^2.2.33",
+    "package.json": "^2.0.1",
+    "request": "^2.81.0",
+    "xml2js": "^0.4.19"
+  },
+  "author": "vivek rana",
+  "license": "ISC"
+}
