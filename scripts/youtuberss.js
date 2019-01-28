@@ -1,54 +1,102 @@
-const request = require('request');
 const xml2js = require('xml2js');
-const parser = new xml2js.Parser();
-const mongoClient = require('mongodb').MongoClient;
+const { promisify } = require('util');
 
-mongoClient.connect("mongodb://youtube:youtube@localhost:27017/youtubeVideoDatabase", function(error, db){
-	if(error){
-		return console.log(error);
+const parseString = promisify(new xml2js.Parser().parseString);
+const request = promisify(require('request'));
+
+const mongoClient = require('mongodb').MongoClient;
+const connectionString = 'mongodb://youtube:youtube@localhost:27017/youtubeVideoDatabase';
+const channelsCollection = 'channels';
+const mongoOptions = {reconnectTries: 30, reconnectInterval: 1000};
+
+const requestString = 'https://www.youtube.com/feeds/videos.xml?channel_id=';
+
+// calling main method
+main();
+
+// main method - get db, get channels, get rss from youtube and insert in mongo
+async function main(){
+	let db;
+	let isSuccess = false;
+
+	try{
+
+		db = await mongoClient.connect(connectionString, mongoOptions);
+
+		const channels = await getChannelsFromMongo(db);
+
+		isSuccess = await requestForChannelRssAndInsertInMongo(channels, db);
+
+	}catch (ex){
+
+		console.log('logging exception: ' + ex);
+	} finally{
+
+		if(db == undefined) console.log('Not able to connect to database.');
+    else
+      db.close();
 	}
 
-	db.collection('channels', function(error, collection){
-		if(error){
-		  db.close();
-		  return console.log(err);
+	console.log('Process Status: ' + isSuccess);
+	return;
+}
+
+// get channels list from mongo
+async function getChannelsFromMongo(db){
+
+	let channels = [];
+
+	const collection = await db.collection(channelsCollection);
+
+	channels = await collection.find({}).toArray();
+
+	return channels;
+}
+
+// get rss from youtube and insert it after parsing. Not using forEach as
+// inside code is using await
+async function requestForChannelRssAndInsertInMongo(channels, db){
+
+	try{
+
+		for(var i = 0; i < channels.length; i++){
+			const response = await request(requestString + channels[i]._id, {json: true});
+
+			const body = response.body;
+			const bodyString = await parseString(body);
+
+			const entries = bodyString.feed.entry;
+
+			await insertIntoMongo(entries, channels[i], db);
 		}
+	} catch(ex){
+		console.log('Error while fetching from youtube: ' + ex);
+		return false;
+	}
 
-		collection.find({}).toArray(function(error, channels){
-			if(error){
-				db.close();
-				return console.log(error);
-			}
-			
-			channels.forEach((channel) => {
-				request('https://www.youtube.com/feeds/videos.xml?channel_id='+channel._id, { json: true }, (err, res, body) => {
-					if (err) { return console.log(err); }
-				  
-					parser.parseString(body, function(error, result){
-						if(error) { return console.log(error); }
+	return true;
+}
 
-					db.collection(channel.title+"_youtube_rss", function(error, coll){
-						if(error){
-						  return console.log(err);
-						}
+// inserting in mongo
+async function insertIntoMongo(entries, channel, db){
 
-						var entries = result.feed.entry;
-						
-						entries.forEach((entry) => {
-						  coll.replaceOne({'_id': entry['yt:videoId'][0]},{'_id': entry['yt:videoId'][0], 'title': entry.title[0], 'author': entry.author[0].name[0], 
-						  'description': entry['media:group'][0]['media:description'][0], 'community': {'starRating': entry['media:group'][0]['media:community'][0]['media:starRating'][0]['$'],
-						  'statistics': entry['media:group'][0]['media:community'][0]['media:statistics'][0]['$']},
-						  'published': entry.published[0], 'updated': entry.updated[0]}, { upsert: true }, function(error, result){
-								if(error){ 
-									return console.log(error); 
-								}
-							  
-						  });						  
-						});												
-					  });					
-				  });
-				});
-			});	
+	const collection = await db.collection(channel.title+'_youtube_rss');
+
+	try{
+		entries.forEach((entry) => {
+
+			collection.replaceOne({'_id': entry['yt:videoId'][0]},{'_id': entry['yt:videoId'][0], 'title': entry.title[0], 'author': entry.author[0].name[0],
+			'description': entry['media:group'][0]['media:description'][0], 'community': {'starRating': entry['media:group'][0]['media:community'][0]['media:starRating'][0]['$'],
+			'statistics': entry['media:group'][0]['media:community'][0]['media:statistics'][0]['$']},
+			'published': entry.published[0], 'updated': entry.updated[0]}, { upsert: true }, function(error, result){
+				if(error){
+					console.log(error);
+				}
+			});
 		});
-	});	
-});
+	} catch(ex){
+		console.log(ex);
+	}
+
+	return;
+}
